@@ -1,6 +1,8 @@
 # Architecture
 
-Compose/Material 3 displays Home, My backups and Allowed content. BackupViewModel owns UI StateFlows. BackupRepository coordinates HTTP, Room jobs, Android Keystore, MediaStore/SAF and WorkManager. No full-drive operation exists.
+The current Compose/Material 3 entry point displays a two-action upload/view home, device-authenticated owner settings and an official Quark WebView. See [website workflow](quark-webview.md) for the current flow and its soft isolation boundary. MainActivity owns transient screen/owner/selection state; QuarkPane owns and destroys WebView; QuarkPolicy centralizes top-level URL and MIME decisions. Only the folder binding is stored in app-private preferences.
+
+The following diagram and backup/restore sections describe the retained native mock-backend implementation. BackupViewModel owns its StateFlows; BackupRepository coordinates HTTP, Room jobs, Android Keystore, MediaStore/SAF and WorkManager. It is no longer invoked by the current home. Backend authorization and provider contracts are unchanged.
 
 ```mermaid
 flowchart LR

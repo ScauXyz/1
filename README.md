@@ -1,6 +1,8 @@
-# Device Backup
+# 文件空间 / Device Backup
 
-Independent Kotlin/Compose Android client and FastAPI backend with persistent **MockCloudStorageProvider**. No third-party account, private API, cookies, account credentials or Quark branding is used.
+Native Kotlin/Compose home for upload/view through an owner-bound official Quark WebView. Android device authentication protects owner settings. Website sessions stay inside WebView; native code does not read/export cookies or store passwords. WebView navigation is **soft isolation**, not account-level authorization. The existing FastAPI mock backup backend and security tests remain intact. No private Quark API or official-app modification is used.
+
+See [official website workflow and device acceptance checks](docs/quark-webview.md) before use. Owner setup, real login/SMS and actual website upload behavior require manual device validation.
 
 ## Run the backend
 
@@ -35,9 +37,9 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 For another host, build with -PbackupBaseUrl=https://your-backend.example/. Debug allows cleartext only on loopback/emulator hosts. Release requires HTTPS and defaults to an unusable example address; configure your endpoint and signing before distribution. A remote cloud backend requires your authorized HTTPS deployment or forwarding: 10.0.2.2 addresses the emulator's host, not a remote cloud container.
 
-Launch and refresh to register this device. Demo resources: IMG_001.jpg, VID_001.mp4, documents.zip, Family Photos and Public Documents. Grant media access and tap Back up now, or Select files using Android SAF. My backups and Allowed content offer Download / restore to a SAF destination. Originals are never deleted. No arbitrary path, resource-ID input, parent directory, global search or other-device view exists.
+The current home has 上传文件 / 查看文件. First authenticate through 所有者设置, log into the official website, enter a concrete folder and confirm its binding. Upload selects local documents and confirms names before the official page can request them. File handoff is not upload success. Viewing is not a server-enforced read-only permission. The app does not contact the mock backend from this new home.
 
-Automatic backup defaults off and scans at a minimum 15-minute interval, subject to Android scheduling. Wi-Fi only uses Android's unmetered classification. Android 14 partial media access limits counts/backups to permitted media. Files are limited to **32 MiB each**. SAF providers must support persistent read grants for background work.
+The retained native backup repository supports MediaStore/SAF, Room jobs, WorkManager, incremental SHA-256 deduplication and authorized restore against the mock backend. Its previous dashboard is superseded by the new product direction; backend endpoints and tests remain available independently. The mock API's 32 MiB limit does not describe the official website's limits.
 
 ## Validation
 

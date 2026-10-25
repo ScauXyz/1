@@ -1,8 +1,14 @@
 # Security model
 
+## Current WebView product boundary
+
+The current Android home opens the official Quark website with a device-authenticated owner folder binding. WebView itself stores the website login session as requested; native code never reads/exports cookies, cloud tokens or passwords. Folder navigation controls are **soft isolation only**, including view mode. They do not constrain the account on Quark servers. See [website security boundary and acceptance checks](quark-webview.md). Use an account whose entire contents are acceptable for the device when strong website-side folder authorization is unavailable.
+
+The remaining sections describe the separately retained mock-backend security model, not authorization of the official website.
+
 ## Identity
 
-The Android client is untrusted; backend authorization is authoritative. Registration creates a random UUID and 256-bit random device token valid for 30 days. SQLite stores only its SHA-256. Tokens travel in Authorization headers, never query strings. Android encrypts its token with AES-GCM using a non-exportable Android Keystore key. Device ID is ordinary metadata. Application backup is disabled. No full-account/cloud-drive/administrator credential exists on Android.
+The Android client is untrusted; backend authorization is authoritative. Registration creates a random UUID and 256-bit random device token valid for 30 days. SQLite stores only its SHA-256. Tokens travel in Authorization headers, never query strings. Android encrypts its token with AES-GCM using a non-exportable Android Keystore key. Device ID is ordinary metadata. Application backup is disabled. No full-account/cloud-drive/administrator credential is stored by the native backend client. The separate WebView retains its own official website session.
 
 A Keystore failure or expired token is shown without silently replacing device identity. Recovery/rotation is not implemented. Reinstalling/clearing app data loses access unless the server operator implements a separate trusted recovery process.
 

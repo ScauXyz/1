@@ -1,184 +1,164 @@
 package dev.restricted.backup
 
-import android.Manifest
-import android.graphics.Bitmap
-import android.os.Build
+import android.app.Activity
+import android.app.KeyguardManager
+import android.content.Context
+import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
+import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.lightColorScheme
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.produceState
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
-import java.text.DateFormat
-import java.util.Date
-import java.util.Locale
 
 class MainActivity : ComponentActivity() {
+    private var ownerUntil by mutableLongStateOf(0L)
+    private var screen by mutableStateOf("home")
+    private var message by mutableStateOf("")
+    private var selected by mutableStateOf<List<Uri>>(emptyList())
+    private var names by mutableStateOf<List<String>>(emptyList())
+    private var confirm by mutableStateOf(false)
+    private val settings by lazy { getSharedPreferences("quark_owner", Context.MODE_PRIVATE) }
+    private var bound by mutableStateOf<String?>(null)
+    private var folderDraft by mutableStateOf("")
+    private val authenticate = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        if (it.resultCode == Activity.RESULT_OK) {
+            ownerUntil = SystemClock.elapsedRealtime() + 5 * 60_000
+            screen = "settings"
+        } else message = "设备认证已取消，设置保持锁定。"
+    }
+    private val picker = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        selected = uris.filter { it.scheme == "content" }.distinct()
+        names = selected.map { uri ->
+            try {
+                contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+                    if (it.moveToFirst()) it.getString(0) else "所选文件"
+                } ?: "所选文件"
+            } catch (_: Exception) { "无法读取的文件" }
+        }
+        confirm = selected.isNotEmpty()
+    }
+    private fun owner() = SystemClock.elapsedRealtime() < ownerUntil
+    private fun unlock() {
+        val manager = getSystemService(KeyguardManager::class.java)
+        @Suppress("DEPRECATION")
+        val intent = manager.createConfirmDeviceCredentialIntent("所有者设置", "请验证设备锁屏凭据")
+        if (!manager.isDeviceSecure || intent == null) {
+            message = "请先在 Android 设置中启用安全锁屏。"
+        } else {
+            try { authenticate.launch(intent) }
+            catch (_: Exception) { message = "设备认证不可用，无法打开设置。" }
+        }
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        bound = settings.getString("folder", null)?.takeIf(QuarkPolicy::binding)
+        folderDraft = bound.orEmpty()
         setContent {
-            MaterialTheme(colorScheme = lightColorScheme(primary = Color(0xFF245C52))) { BackupScreen() }
-        }
-    }
-}
-
-@Composable
-private fun BackupScreen(model: BackupViewModel = viewModel()) {
-    val state by model.state.collectAsStateWithLifecycle()
-    val jobs by model.jobs.collectAsStateWithLifecycle()
-    var tab by rememberSaveable { mutableIntStateOf(0) }
-    var restoring by remember { mutableStateOf<Pair<RemoteResource, Boolean>?>(null) }
-    val restorePicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
-        restoring?.let { target -> if (uri != null) model.restore(target.first, target.second, uri) }
-        restoring = null
-    }
-    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        if (uris.isNotEmpty()) model.select(uris)
-    }
-    val permissionPicker = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { model.refresh() }
-    val completed = jobs.count { it.status == "COMPLETE" }
-    LaunchedEffect(completed) { if (completed > 0) model.refresh() }
-    Scaffold(bottomBar = {
-        NavigationBar {
-            listOf("Home", "My backups", "Allowed content").forEachIndexed { index, title ->
-                NavigationBarItem(selected = tab == index, onClick = { tab = index },
-                    icon = { Text(listOf("⌂", "▣", "✓")[index]) }, label = { Text(title) })
-            }
-        }
-    }) { inset ->
-        LazyColumn(modifier = Modifier.fillMaxSize().padding(inset),
-            contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            item {
-                Text("Device Backup", style = MaterialTheme.typography.headlineMedium)
-                Text("Independent client · Mock storage demo", style = MaterialTheme.typography.bodyMedium)
-                TextButton(onClick = model::refresh, enabled = !state.busy) { Text("Refresh") }
-                if (state.busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                if (state.message.isNotEmpty()) Text(state.message, color = MaterialTheme.colorScheme.primary)
-            }
-            if (tab == 0) {
-                item {
-                    Text("Your phone, your backup", style = MaterialTheme.typography.titleLarge)
-                    Text("Only this device's backups and approved content are accessible.")
-                    Setting("Automatic backup", state.automatic) { model.configure(it, state.wifiOnly) }
-                    Setting("Wi-Fi only (unmetered network)", state.wifiOnly) { model.configure(state.automatic, it) }
-                    Text("Local photos: ${state.photos}  ·  Local videos: ${state.videos}")
-                    Text("Pending: ${jobs.count { it.status in setOf("PENDING", "RUNNING", "RETRY") }}")
-                    Text("Backed up: ${state.backups.size}  ·  Used cloud space: ${formatSize(state.backups.sumOf { it.size })}")
-                    Text("MVP file limit: 32 MiB. Automatic backup scans at least every 15 minutes when Android allows.")
-                    Button(onClick = model::backupNow, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("Back up now") }
-                    OutlinedButton(onClick = { filePicker.launch(arrayOf("*/*")) }, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("Select files") }
-                    OutlinedButton(onClick = { tab = 1 }, modifier = Modifier.fillMaxWidth()) { Text("My backups") }
-                    TextButton(onClick = {
-                        permissionPicker.launch(if (Build.VERSION.SDK_INT >= 34) arrayOf(
-                            Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO,
-                            Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
-                        else if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)
-                        else arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE))
-                    }) { Text("Grant or update photo/video access") }
-                    HorizontalDivider()
-                    Text("Backup jobs", style = MaterialTheme.typography.titleMedium)
-                    if (jobs.isEmpty()) Text("Select files or grant media access to start a backup. Your originals are never deleted.")
-                }
-                items(jobs, key = { it.sourceKey }) { job ->
-                    Card(modifier = Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(12.dp)) {
-                            Text(job.name)
-                            Text("${job.status} · ${job.progress}% · ${formatSize(job.size)}")
-                            if (job.status == "RUNNING") LinearProgressIndicator(progress = { job.progress / 100f }, modifier = Modifier.fillMaxWidth())
-                            if (job.error.isNotEmpty()) Text(job.error, color = MaterialTheme.colorScheme.error)
+            MaterialTheme(colorScheme = lightColorScheme(primary = Color(0xFF176B5B), background = Color(0xFFF6F8F7))) {
+                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().padding(20.dp)) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("文件空间", modifier = Modifier.weight(1f), style = MaterialTheme.typography.headlineMedium)
+                            TextButton(onClick = { screen = "home"; selected = emptyList(); ownerUntil = 0 }) { Text("首页") }
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        when (screen) {
+                            "home" -> Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                                Text("选择文件，安心交接", style = MaterialTheme.typography.titleLarge)
+                                Text("使用夸克官方网页保存的登录会话。请由所有者先登录并绑定目标文件夹。")
+                                Card(Modifier.fillMaxWidth()) {
+                                    Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                        Text(if (bound == null) "尚未绑定文件夹" else "已绑定所有者指定文件夹")
+                                        Button(onClick = {
+                                            try { picker.launch(arrayOf("*/*")) }
+                                            catch (_: Exception) { message = "系统文件选择器不可用。" }
+                                        }, enabled = bound != null, modifier = Modifier.fillMaxWidth()) { Text("上传文件") }
+                                        OutlinedButton(onClick = { screen = "view" }, enabled = bound != null,
+                                            modifier = Modifier.fillMaxWidth()) { Text("查看文件") }
+                                    }
+                                }
+                                Text("网页限制属于软隔离，不能替代服务端权限控制。登录账号应仅包含可向此设备开放的文件。",
+                                    style = MaterialTheme.typography.bodySmall)
+                                TextButton(onClick = ::unlock) { Text("所有者设置 · 设备认证") }
+                            }
+                            "settings" -> {
+                                Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    Text("所有者设置", style = MaterialTheme.typography.titleLarge)
+                                    Text("认证有效期 5 分钟。官方网页支持情况需在此设备手动验证；不会读取 Cookie 或保存密码。")
+                                    Button(onClick = {
+                                        if (owner()) screen = "login" else { screen = "home"; message = "认证已过期，请重新验证。" }
+                                    }) { Text("打开官方网页人工登录") }
+                                    OutlinedTextField(value = folderDraft, onValueChange = { folderDraft = it },
+                                        label = { Text("固定文件夹完整网址") }, modifier = Modifier.fillMaxWidth())
+                                    Text("接受格式：https://pan.quark.cn/list#/list/all/文件夹ID。请从官方网页确认具体文件夹，根目录不接受。")
+                                    Button(onClick = {
+                                        if (!owner()) { screen = "home"; message = "认证已过期。" }
+                                        else if (!QuarkPolicy.binding(folderDraft.trim())) message = "网址格式不符合固定文件夹规则，未保存。"
+                                        else if (settings.edit().putString("folder", folderDraft.trim()).commit()) {
+                                            bound = folderDraft.trim(); ownerUntil = 0; screen = "home"; message = "已保存文件夹绑定，尚未验证网页可访问性。"
+                                        } else message = "设置保存失败，请重试。"
+                                    }) { Text("保存绑定并锁定") }
+                                    OutlinedButton(onClick = {
+                                        if (owner()) {
+                                            if (settings.edit().remove("folder").commit()) {
+                                                bound = null; folderDraft = ""
+                                                ownerUntil = 0; screen = "home"; message = "已解除文件夹绑定。WebView 登录会话仍由系统组件管理。"
+                                            } else message = "设置保存失败，请重试。"
+                                        } else { screen = "home"; message = "认证已过期。" }
+                                    }) { Text("解除绑定") }
+                                }
+                            }
+                            else -> {
+                                val login = screen == "login"
+                                val upload = screen == "upload"
+                                Text(if (login) "官方网页登录 · 仅所有者" else if (upload) "等待官方网页请求文件" else "已绑定文件夹",
+                                    style = MaterialTheme.typography.titleMedium)
+                                Text(if (upload) "请在官方网页点击上传。文件交接后，请在网页核实最终结果。" else "仅允许当前模式的官方页面导航。", style = MaterialTheme.typography.bodySmall)
+                                QuarkPane(
+                                    initialUrl = if (login) QuarkPolicy.LOGIN else bound.orEmpty(),
+                                    binding = bound, ownerMode = login, ownerAuthorized = ::owner,
+                                    files = if (upload) selected else emptyList(),
+                                    onHandoff = { selected = emptyList() },
+                                    onFolderSelected = { url ->
+                                        if (owner()) { folderDraft = url; screen = "settings" }
+                                        else { screen = "home"; message = "认证已过期。" }
+                                    },
+                                    onMessage = { message = it }, modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+                        if (message.isNotBlank()) {
+                            Text(message, modifier = Modifier.padding(top = 12.dp), style = MaterialTheme.typography.bodyMedium)
+                            TextButton(onClick = { message = "" }) { Text("关闭提示") }
                         }
                     }
+                    if (confirm) AlertDialog(onDismissRequest = { confirm = false; selected = emptyList() },
+                        title = { Text("确认交接 ${selected.size} 个文件") },
+                        text = { Column(Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState())) {
+                            names.forEach { Text(it) }
+                            Text("仅在官方网页请求文件时交接。此操作不表示上传成功；原始文件不会删除。")
+                        } },
+                        confirmButton = { TextButton(onClick = {
+                            confirm = false
+                            if (bound != null) screen = "upload" else { selected = emptyList(); message = "请先绑定文件夹。" }
+                        }) { Text("确认并打开网页") } },
+                        dismissButton = { TextButton(onClick = { confirm = false; selected = emptyList() }) { Text("取消") } })
                 }
-            } else {
-                val allowed = tab == 2
-                val resources = if (allowed) state.allowed else state.backups
-                item {
-                    Text(if (allowed) "Administrator-approved resources" else "My backups", style = MaterialTheme.typography.titleLarge)
-                    if (!allowed && state.deviceId.isNotBlank()) Text(ScopePolicy.namespace(state.deviceId))
-                    if (resources.isEmpty()) Text("No ${if (allowed) "approved content" else "backups"} available. Refresh after a job finishes.")
-                }
-                items(resources, key = { it.id }) { resource ->
-                    ResourceCard(resource, allowed, model.repository, !state.busy) {
-                        restoring = resource to allowed
-                        restorePicker.launch(resource.displayName)
-                    }
-                }
-            }
-            item { Spacer(Modifier.size(8.dp)) }
-        }
-    }
-}
-
-@Composable
-private fun Setting(label: String, checked: Boolean, change: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, modifier = Modifier.weight(1f).padding(top = 14.dp))
-        Switch(checked = checked, onCheckedChange = change)
-    }
-}
-
-@Composable
-private fun ResourceCard(resource: RemoteResource, allowed: Boolean, repository: BackupRepository, enabled: Boolean, restore: () -> Unit) {
-    val thumbnail by produceState<Bitmap?>(null, resource.id) {
-        value = try { repository.thumbnail(resource, allowed) }
-        catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-        catch (_: Exception) { null }
-    }
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            thumbnail?.let { Image(it.asImageBitmap(), "Thumbnail of ${resource.displayName}", modifier = Modifier.size(64.dp)) }
-            Column(Modifier.weight(1f)) {
-                Text(resource.displayName, style = MaterialTheme.typography.titleMedium)
-                Text("${formatSize(resource.size)} · ${resource.type}")
-                Text(DateFormat.getDateTimeInstance().format(Date(resource.backupTime)))
-                if (resource.readOnly) Text("Read only")
-                TextButton(onClick = restore, enabled = enabled) { Text("Download / restore") }
             }
         }
     }
-}
-
-private fun formatSize(bytes: Long): String = when {
-    bytes < 1024 -> "$bytes B"
-    bytes < 1024 * 1024 -> String.format(Locale.US, "%.1f KiB", bytes / 1024.0)
-    else -> String.format(Locale.US, "%.1f MiB", bytes / (1024.0 * 1024))
+    override fun onStop() {
+        super.onStop()
+        ownerUntil = 0
+        if (screen == "login" || screen == "settings") screen = "home"
+    }
 }
